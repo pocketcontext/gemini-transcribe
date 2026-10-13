@@ -71,14 +71,16 @@ def timestamp(seconds, separator="."):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}{separator}{milliseconds:03d}"
 
 
-def render_txt(data):
+def render_txt(data, names=None):
+    from .speaker_names import label
     return "\n".join(f"[{timestamp(s['start'])} – {timestamp(s['end'])}] "
-                     f"{s['speaker']}: {s['text']}" for s in data["segments"]) + "\n"
+                     f"{label(s['speaker'], names)}: {s['text']}" for s in data["segments"]) + "\n"
 
 
-def render_srt(data):
+def render_srt(data, names=None):
+    from .speaker_names import label
     return "\n\n".join(f"{i}\n{timestamp(s['start'], ',')} --> "
-                       f"{timestamp(s['end'], ',')}\n{s['speaker']}: "
+                       f"{timestamp(s['end'], ',')}\n{label(s['speaker'], names)}: "
                        + " ".join(s['text'].split())
                        for i, s in enumerate(data["segments"], 1)) + "\n"
 
@@ -138,7 +140,7 @@ def transcribe(client, path, model=DEFAULT_MODEL, language=None, processing_time
             model=model, input=[{"type": "text", "text": prompt},
                 {"type": "audio", "uri": _get(uploaded, "uri"),
                  "mime_type": _get(uploaded, "mime_type") or MIME_TYPES[path.suffix.lower()]}],
-            response_format=bundle.transcript_response_schema(duration) if duration is not None else RESPONSE_SCHEMA, store=True)
+            response_format=bundle.transcript_response_schema(duration) if duration is not None else RESPONSE_SCHEMA, store=False)
         if _get(result, "status") != "completed":
             raise TranscriptionError("Gemini did not return a completed transcription.", "incomplete_response")
         content = _get(result, "output_text")

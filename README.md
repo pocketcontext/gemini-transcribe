@@ -70,9 +70,13 @@ the transcript. Summaries and other analyses are separate, segment-linked artifa
 Unstated owners/deadlines remain null; speaker names can be tentative and tone is
 explicitly subjective.
 
-Interactions requests explicitly use `store=True` to opt into server-side
-interaction storage. This is separate from the GenerateContent logging setting.
-Deleting the uploaded file does not delete the stored interaction.
+Interactions requests explicitly use `store=False`, including resumed enrichment.
+This opts out of interaction storage; it does not change Google's other data-use
+terms. Version 2 bundles retain their original `extraction.store` flag on resume;
+resuming does not delete any previously stored results. Version 1 bundles are
+not accepted by this version.
+This is separate from the GenerateContent logging setting and uploaded-file deletion.
+See Google's [interaction retention documentation](https://ai.google.dev/gemini-api/docs/interactions-overview#data-storage-and-retention).
 
 A private temporary snapshot preserves the exact input bytes used for duration
 measurement and upload; allow temporary disk space up to the recording size.
@@ -98,6 +102,8 @@ This version processes one whole recording per request. It does not split long
 audio or reconcile speaker identities across recordings. Very long recordings
 can exceed model input/output limits. SRT timestamps are model estimates, not
 forced word alignment, and overlapping speech can produce overlapping cues.
+See [recording limits and measurement](docs/recording-limits.md) before processing
+long recordings. The 2 GiB file cap is not a supported-duration guarantee.
 
 ## Portable launcher and skill
 
@@ -133,6 +139,15 @@ go to stderr. Exit codes: 0 complete, 1 failed, 2 usage/configuration, 3 partial
 The receipt points to `manifest.json`. See the [bundle contract](docs/bundle-format.md)
 for hashes, provenance, stage states and stable within-extraction segment IDs.
 No raw provider response is dumped. Timestamp validity does not establish accuracy.
+
+Errors use safe codes rather than provider payloads. `bundle_in_use` means another
+writer holds the run lock; `resume_invalid` means bundle validation failed.
+`source_changed` identifies an unstable recording; `source_unavailable` identifies
+a filesystem error during source preflight. `export_failed` identifies
+a failure saving stage artifacts. `request_timeout` distinguishes a transport
+timeout from `request_failed`; `processing_timeout` refers to uploaded-file
+readiness. `incomplete_response` and `invalid_output` identify unusable model
+responses. Local failures outside these categories retain `local_failure`.
 
 To preserve everything in WikiContext, use its external-transcript importer:
 
@@ -177,3 +192,36 @@ Official references:
 - [Structured output](https://ai.google.dev/gemini-api/docs/structured-output)
 - [API billing](https://ai.google.dev/gemini-api/docs/billing)
 - [Google Developer Program benefits](https://developers.google.com/program/plans-and-pricing)
+
+## Named speakers and offline export
+
+Successful analysis produces TXT/SRT and translated presentations using supported
+names, such as `Alice (SPEAKER_01)`. Canonical JSON keeps stable speaker IDs.
+Tentative, conflicting and duplicate names retain generic labels. Review identities
+against the recording before relying on them.
+
+Regenerate an existing bundle without an API key or another Gemini request:
+
+```sh
+uv run --locked gemini-transcribe --export /path/to/run/manifest.json \
+  --output-dir /path/to/named-exports --json
+```
+
+For reviewed corrections, add `--speaker-overrides /path/to/names.json` containing:
+
+```json
+{
+  "schema_version": "gemini-transcribe.speaker-names/v1",
+  "policy": "explicit-unambiguous/v1",
+  "overrides": [
+    {"speaker": "SPEAKER_01", "name": "Alice", "reason": "Reviewed the self-introduction in seg000003."}
+  ]
+}
+```
+
+Each export creates a private bundle copy with updated presentation hashes and
+parent-manifest provenance. Original JSON bytes and the input bundle are preserved.
+Keep correction files private. Existing overrides are inherited unless a replacement
+file is supplied; an empty overrides array clears them. Use a new WikiContext
+`--version` when importing corrected evidence and explicitly publish updated pages;
+existing passages and citations remain historical evidence.

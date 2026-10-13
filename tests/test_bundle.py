@@ -60,7 +60,7 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777,0o600)
         self.assertEqual(self.audio.read_bytes(),before)
         self.assertEqual(pipeline.load_resume(directory/'manifest.json')[1],manifest)
-        self.assertTrue(all(c.kwargs['store'] for c in self.client.interactions.create.call_args_list))
+        self.assertTrue(all(c.kwargs['store'] is False for c in self.client.interactions.create.call_args_list))
         self.client.files.delete.assert_called_once()
 
     def test_partial_saved_before_analysis_and_resume_without_upload(self):
@@ -116,7 +116,8 @@ class BundleTests(unittest.TestCase):
         (directory/'transcript.txt').write_text('tampered')
         self.args.resume=directory/'manifest.json'
         self.client.reset_mock()
-        with self.assertRaises(ValueError): self.process()
+        with self.assertRaises(cli.TranscriptionError) as caught: self.process()
+        self.assertEqual(caught.exception.code, 'resume_invalid')
         self.client.interactions.create.assert_not_called()
 
     def test_cli_json_receipt_and_partial_exit(self):
@@ -151,7 +152,8 @@ class BundleTests(unittest.TestCase):
         fd=os.open(directory,os.O_RDONLY)
         try:
             fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            with self.assertRaises(BlockingIOError): self.process()
+            with self.assertRaises(cli.TranscriptionError) as caught: self.process()
+            self.assertEqual(caught.exception.code, 'bundle_in_use')
         finally:
             os.close(fd)
 
@@ -192,8 +194,9 @@ class BundleTests(unittest.TestCase):
                 manifest_path=next(self.args.output_dir.glob('*/manifest.json'))
                 resume_args=argparse.Namespace(**vars(self.args))
                 resume_args.resume=manifest_path
-                with self.assertRaises(BlockingIOError):
+                with self.assertRaises(cli.TranscriptionError) as caught:
                     pipeline.process(resume_args,MagicMock())
+                self.assertEqual(caught.exception.code, 'bundle_in_use')
                 blocked.append(True)
                 return response(analysis())
             if kwargs['response_format'] == bundle.TRANSLATION_SCHEMA:

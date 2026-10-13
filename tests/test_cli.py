@@ -80,7 +80,7 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(result, transcript())
         request = self.client.interactions.create.call_args.kwargs
         self.assertEqual(request["model"], "test-model")
-        self.assertTrue(request["store"])
+        self.assertFalse(request["store"])
         self.assertEqual(request["input"][1]["uri"], "fake://audio")
         self.client.files.delete.assert_called_once_with(name="files/example")
 
