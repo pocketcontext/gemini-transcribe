@@ -1,0 +1,4 @@
+# -*- mode: sh; -*-
+# Copy to .envrc.private and replace the placeholder. Never commit real keys.
+export GEMINI_API_KEY='REPLACE_WITH_YOUR_GEMINI_API_KEY'
+export GEMINI_MODEL='gemini-3.8-flash'
