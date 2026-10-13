@@ -1,6 +1,6 @@
 { config, lib, pkgs, ... }:
 {
-  packages = [ pkgs.uv ];
+  packages = [ pkgs.uv pkgs.ffmpeg ];
   languages.python = {
     enable = true;
     package = pkgs.python312;

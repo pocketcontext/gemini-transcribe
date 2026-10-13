@@ -99,8 +99,9 @@ class RequestTests(unittest.TestCase):
             with self.subTest(state=state):
                 self.client.reset_mock()
                 self.upload.state = state
-                with self.assertRaises(cli.TranscriptionError):
+                with self.assertRaises(cli.TranscriptionError) as caught:
                     cli.transcribe(self.client, "example.wav", processing_timeout=timeout)
+                self.assertEqual(caught.exception.code, "processing_timeout" if state == "PROCESSING" else "processing_failed")
                 self.client.interactions.create.assert_not_called()
                 self.client.files.delete.assert_called_once_with(name="files/example")
 
@@ -114,8 +115,9 @@ class RequestTests(unittest.TestCase):
             with self.subTest(response=response):
                 self.client.reset_mock()
                 self.client.interactions.create.return_value = response
-                with self.assertRaises(cli.TranscriptionError):
+                with self.assertRaises(cli.TranscriptionError) as caught:
                     cli.transcribe(self.client, "example.wav")
+                self.assertEqual(caught.exception.code, "incomplete_response" if response["status"] != "completed" else "invalid_output")
                 self.client.files.delete.assert_called_once_with(name="files/example")
 
     def test_text_output_blocks_are_supported(self):
@@ -171,12 +173,13 @@ class OutputAndCliTests(unittest.TestCase):
                      patch.object(cli.genai, "Client", return_value=sdk_client), \
                      patch.object(sdk_client.files, "upload", return_value=uploaded), \
                      patch.object(sdk_client.files, "delete") as delete, \
-                     patch("sys.stderr", io.StringIO()):
+                     patch("sys.stderr", io.StringIO()), \
+                     patch("gemini_transcribe.bundle.audio_metadata", return_value={"name":"test.wav","sha256":"0"*64,"size_bytes":19,"mime_type":"audio/wav","duration_seconds":3}):
                     result = cli.main([str(audio), "--output-dir", str(Path(root) / "output")])
                 self.assertEqual(result, 1)
                 self.assertEqual(len(requests), 1)
                 delete.assert_called_once_with(name="files/test")
-                self.assertFalse((Path(root) / "output").exists())
+                self.assertEqual(len(list((Path(root) / "output").glob("*/manifest.json"))), 1)
 
     def test_repeated_exports_do_not_overwrite(self):
         with tempfile.TemporaryDirectory() as root:

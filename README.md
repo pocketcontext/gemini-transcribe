@@ -1,13 +1,15 @@
 # Gemini Transcribe
 
 A small Python command-line application that sends an audio file directly to
-Gemini and produces a transcript with speaker labels and timestamps. The default
+Gemini and produces a versioned evidence bundle: transcript, speaker labels,
+timestamps, audio observations, summary, topics, decisions, actions, questions,
+speaker-name mappings and translation. The default
 model is `gemini-3.8-flash`; override it with `GEMINI_MODEL` or `--model`.
 
 ## Setup
 
-Requirements: Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
-The included `devenv.nix` supplies Python 3.12 and uv.
+Requirements: Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and
+FFmpeg (`ffprobe` must be on PATH). The included `devenv.nix` supplies them.
 
 ```sh
 git clone https://github.com/pocketcontext/gemini-transcribe.git
@@ -55,17 +57,25 @@ Supported file extensions: WAV, MP3, AIFF/AIF, AAC, OGG, FLAC and M4A.
 Files must be nonempty and smaller than 2 GiB; model duration and output limits
 still apply.
 
-Each invocation creates a unique output directory containing a JSON transcript,
-a readable TXT transcript and SRT subtitles. Existing transcripts are preserved.
+Each invocation creates a unique private output directory containing a manifest,
+JSON/TXT/SRT transcript, JSON/Markdown analysis and JSON/TXT/SRT translation.
+Translation defaults to English; use `--translation-language Italian` to change it.
+Use `--transcript-only` to skip semantic analysis and translation while retaining
+audio observations. Existing transcripts are preserved.
 Labels such as `SPEAKER_01` identify voices within a recording, not real-world
 identities. The language option is a hint; the transcript stays in the original
 language. The prompt requests verbatim text, consistent labels, uncertain and
-inaudible passages marked explicitly, and no invented names or summarization.
+inaudible passages marked explicitly, and no invented names or paraphrasing of
+the transcript. Summaries and other analyses are separate, segment-linked artifacts.
+Unstated owners/deadlines remain null; speaker names can be tentative and tone is
+explicitly subjective.
 
 Interactions requests explicitly use `store=True` to opt into server-side
 interaction storage. This is separate from the GenerateContent logging setting.
 Deleting the uploaded file does not delete the stored interaction.
 
+A private temporary snapshot preserves the exact input bytes used for duration
+measurement and upload; allow temporary disk space up to the recording size.
 Audio is uploaded to Google's Files API, processed by Gemini, and deletion of
 the uploaded file is attempted even after a generation or validation failure.
 Deletion failures are reported. No audio is sent by setup or offline tests.
@@ -74,8 +84,13 @@ directories are ignored by Git. Custom output paths outside those directories
 are your responsibility.
 
 There are no automatic generation retries: rerunning can incur another API
-charge. Incomplete or invalid structured responses fail rather than being
-presented as successful transcripts. Timestamp and format validation cannot
+charge. The first request transcribes audio and records acoustic observations;
+separate requests analyze and translate the saved transcript. Transcription is
+saved before enrichment. If enrichment fails, the run is
+partial and retains its valid transcript. Resume with
+`gemini-transcribe --resume /path/to/run/manifest.json --json` to retry incomplete
+enrichment without reuploading the audio or regenerating completed stages.
+Incomplete or invalid structured responses are never marked complete. Timestamp and format validation cannot
 establish that the model heard every word or assigned every speaker correctly.
 Check a representative recording before relying on the results.
 
@@ -83,6 +98,55 @@ This version processes one whole recording per request. It does not split long
 audio or reconcile speaker identities across recordings. Very long recordings
 can exceed model input/output limits. SRT timestamps are model estimates, not
 forced word alignment, and overlapping speech can produce overlapping cues.
+
+## Portable launcher and skill
+
+The standalone `skills/gemini-transcribe/gemini-transcribe` uv launcher follows the
+PocketContext application pattern: a full Git commit pins the package and no
+repository checkout or active devenv shell is required. Install uv, Python 3.12+
+and FFmpeg, then copy it onto PATH:
+
+```sh
+mkdir -p ~/.local/bin
+install -m 755 skills/gemini-transcribe/gemini-transcribe ~/.local/bin/gemini-transcribe
+```
+
+Include `~/.local/bin` on PATH and export `GEMINI_API_KEY` in your trusted shell
+configuration. The launcher does not source `.envrc.private`, change directories,
+or embed credentials. Relative paths resolve from your current directory. A
+devenv command with the same name may take precedence inside the development shell.
+
+Install the agent skill separately:
+
+```sh
+npx skills add pocketcontext/gemini-transcribe --skill gemini-transcribe --agent codex claude-code --yes
+```
+
+The launcher executes its pinned release, not uncommitted source changes. Release
+new package code first, then update and validate the launcher's full commit pin.
+Use `uv run --locked gemini-transcribe` to test the current source checkout.
+
+## Machine output and WikiContext
+
+Use `--json` for one machine-readable receipt on stdout; progress and safe errors
+go to stderr. Exit codes: 0 complete, 1 failed, 2 usage/configuration, 3 partial.
+The receipt points to `manifest.json`. See the [bundle contract](docs/bundle-format.md)
+for hashes, provenance, stage states and stable within-extraction segment IDs.
+No raw provider response is dumped. Timestamp validity does not establish accuracy.
+
+To preserve everything in WikiContext, use its external-transcript importer:
+
+```sh
+wikicontext --space companyspace001 ingest recording.m4a \
+  --transcript-bundle /path/to/run/manifest.json \
+  --audio-storage original --version gemini-v1
+```
+
+It preserves the exact recording and artifacts, validates the bundle, and creates
+addressable evidence without another provider call. WikiContext's 100 MiB source
+limit applies. Review actual returned passages and publish cited pages with the
+WikiContext skill; extraction alone is not complete knowledge ingestion. Analytical
+artifacts and format variants do not independently corroborate the original audio.
 
 ## Billing
 
@@ -96,6 +160,7 @@ usage and current model pricing before processing large collections.
 ```sh
 uv sync --locked
 uv run python -m unittest discover -s tests -v
+uv run --locked python tests/launcher.py
 uv build
 ```
 

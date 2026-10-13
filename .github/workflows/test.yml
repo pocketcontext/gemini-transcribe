@@ -1,0 +1,24 @@
+name: CLI validation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/tools"
+          "$RUNNER_TEMP/tools/bin/pip" install uv==0.12.21
+          echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Validate package and copied launcher
+        run: |
+          uv sync --locked --python 3.12
+          uv run --locked python -m unittest discover -s tests -v
+          uv run --locked python tests/launcher.py
+          uv build
