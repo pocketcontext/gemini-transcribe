@@ -147,6 +147,24 @@ Use `--json` for one machine-readable receipt on stdout; progress and safe error
 go to stderr. Exit codes: 0 complete, 1 failed, 2 usage/configuration, 3 partial.
 The receipt points to `manifest.json`. See the [bundle contract](docs/bundle-format.md)
 for hashes, provenance, stage states and stable within-extraction segment IDs.
+Invalid generated output retains `code: invalid_output` and adds a content-free
+`validation` diagnostic to the JSON receipt and saved manifest, also printed on
+stderr. For example:
+
+```json
+{"stage":"transcription","code":"invalid_output","validation":{"reason":"unknown_segment_reference","path":"$.tone[0].segment_ids[0]"}}
+```
+
+Paths use zero-based array indexes and known schema fields. Reasons distinguish
+missing fields, invalid types/enums, timestamp order/bounds, speaker labels and
+references, and translation coverage. Invalid JSON reports line/column only.
+Unknown fields are reported at their containing object without printing their
+names. Unexpected validator exceptions use `invalid_structure` at `$` rather than
+exposing their messages. No rejected values, transcript text or raw provider
+response are retained in diagnostics. These diagnostics apply to both pipelines
+and all generation stages; validation remains strict and no retry is added.
+Old failed manifests cannot recover details that were never saved.
+
 No raw provider response is dumped. Timestamp validity does not establish accuracy.
 
 Errors use safe codes rather than provider payloads. `bundle_in_use` means another

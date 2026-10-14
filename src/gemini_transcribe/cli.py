@@ -13,6 +13,8 @@ import time
 from google import genai
 from google.genai import types
 
+from .validation import ValidationError, diagnostic
+
 DEFAULT_MODEL = "gemini-3.8-flash"
 MAX_FILE_BYTES = 2 * 1024**3
 MIME_TYPES = {".wav": "audio/wav", ".mp3": "audio/mp3", ".aiff": "audio/aiff",
@@ -40,26 +42,27 @@ class TranscriptionError(Exception):
 
 def validate_transcript(data):
     if not isinstance(data, dict) or not isinstance(data.get("language"), str):
-        raise ValueError("Invalid transcript language.")
+        raise ValidationError("invalid_language", "$.language")
     segments = data.get("segments")
     if not isinstance(segments, list):
-        raise ValueError("Invalid transcript segments.")
+        raise ValidationError("expected_array", "$.segments")
     previous = -1
-    for segment in segments:
+    for index, segment in enumerate(segments):
+        path = f"$.segments[{index}]"
         if not isinstance(segment, dict):
-            raise ValueError("Invalid transcript segment.")
+            raise ValidationError("expected_object", path)
         start, end = segment.get("start"), segment.get("end")
         if any(isinstance(t, bool) or not isinstance(t, (int, float)) or
                not math.isfinite(t) or t < 0 for t in (start, end)):
-            raise ValueError("Invalid segment timestamp.")
+            raise ValidationError("invalid_timestamp", path)
         if start > end or start < previous:
-            raise ValueError("Segment timestamps must be ordered.")
+            raise ValidationError("timestamp_order", path)
         previous = start
         if not isinstance(segment.get("speaker"), str) or not re.fullmatch(
                 r"(?:SPEAKER_(?:0[1-9]|[1-9][0-9]+)|UNKNOWN)", segment["speaker"]):
-            raise ValueError("Invalid speaker label.")
+            raise ValidationError("invalid_speaker_label", path+".speaker")
         if not isinstance(segment.get("text"), str) or not segment["text"].strip():
-            raise ValueError("Invalid segment text.")
+            raise ValidationError("expected_nonempty_string", path+".text")
     return data
 
 
@@ -149,8 +152,10 @@ def transcribe(client, path, model=DEFAULT_MODEL, language=None, processing_time
                               if _get(part, "type") == "text")
         try:
             return bundle.validate_transcript(json.loads(content), duration) if duration is not None else validate_transcript(json.loads(content))
-        except (ValueError, TypeError, OverflowError):
-            raise TranscriptionError("Gemini returned an invalid transcript; no transcript outputs were saved.", "invalid_output") from None
+        except (ValueError, TypeError, OverflowError) as exc:
+            error = TranscriptionError("Gemini returned an invalid transcript; no transcript outputs were saved.", "invalid_output")
+            error.validation = diagnostic(exc)
+            raise error from None
     except TranscriptionError:
         raise
     except Exception as exc:

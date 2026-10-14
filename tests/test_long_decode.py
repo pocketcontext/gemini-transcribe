@@ -234,4 +234,7 @@ class LongDecodeBundleTests(unittest.TestCase):
         directory,manifest=self.process()
         self.assertEqual(manifest['status'],'failed')
         self.assertFalse((directory/'transcript.json').exists())
+        self.assertEqual(manifest['errors'][0]['code'], 'invalid_output')
+        self.assertEqual(manifest['errors'][0]['validation']['reason'], 'invalid_json')
+        self.assertEqual(manifest['errors'][0]['validation']['path'], '$')
         underlying.files.delete.assert_called_once()

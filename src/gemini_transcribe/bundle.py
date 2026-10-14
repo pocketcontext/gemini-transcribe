@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from .validation import ValidationError
+
 PREFIX = 'gemini-transcribe.'
 
 def obj(**fields):
@@ -40,102 +42,132 @@ def transcript_response_schema(duration):
     return schema
 
 
-def check_schema(value, schema):
+def check_schema(value, schema, path='$'):
     if 'anyOf' in schema:
         for choice in schema['anyOf']:
             try:
-                check_schema(value, choice)
+                check_schema(value, choice, path)
                 return
-            except ValueError:
+            except ValidationError:
                 pass
-        raise ValueError('Invalid nullable value.')
+        raise ValidationError('invalid_nullable_value', path)
     kind = schema['type']
     if kind == 'object':
-        if not isinstance(value, dict) or set(value) != set(schema['required']):
-            raise ValueError('Unexpected or missing object fields.')
+        if not isinstance(value, dict):
+            raise ValidationError('expected_object', path)
+        for key in schema['required']:
+            if key not in value:
+                raise ValidationError('missing_field', path+'.'+key)
+        if set(value) != set(schema['required']):
+            # Unknown keys are provider content: never include them in paths.
+            raise ValidationError('unexpected_fields', path)
         for key, field in schema['properties'].items():
-            check_schema(value[key], field)
+            check_schema(value[key], field, path+'.'+key)
     elif kind == 'array':
         if not isinstance(value, list):
-            raise ValueError('Expected array.')
-        for item in value:
-            check_schema(item, schema['items'])
+            raise ValidationError('expected_array', path)
+        for index, item in enumerate(value):
+            check_schema(item, schema['items'], f'{path}[{index}]')
     elif kind == 'string':
         if not isinstance(value, str) or not value.strip():
-            raise ValueError('Expected nonempty string.')
+            raise ValidationError('expected_nonempty_string', path)
     elif kind == 'number':
         if isinstance(value, bool) or not isinstance(value, (float,int)) or not math.isfinite(value):
-            raise ValueError('Expected finite number.')
+            raise ValidationError('expected_finite_number', path)
     elif kind == 'boolean':
         if type(value) is not bool:
-            raise ValueError('Expected boolean.')
+            raise ValidationError('expected_boolean', path)
     elif kind == 'null' and value is not None:
-        raise ValueError('Expected null.')
+        raise ValidationError('expected_null', path)
     if 'enum' in schema and value not in schema['enum']:
-        raise ValueError('Invalid enumeration.')
+        raise ValidationError('invalid_enum', path)
 
-def refs(items, ids):
-    if not items or len(items) != len(set(items)) or not set(items) <= ids:
-        raise ValueError('Invalid evidence references.')
+def refs(items, ids, path='$'):
+    if not items:
+        raise ValidationError('empty_references', path)
+    if len(items) != len(set(items)):
+        raise ValidationError('duplicate_references', path)
+    for index, item in enumerate(items):
+        if item not in ids:
+            raise ValidationError('unknown_segment_reference', f'{path}[{index}]')
 
 def validate_transcript(data, duration):
     from .cli import validate_transcript as base_validate
     if not isinstance(data, dict):
-        raise ValueError('Expected object.')
+        raise ValidationError('expected_object')
     copy = {k:v for k,v in data.items() if k != 'schema_version'}
     canonical = data.get('schema_version') == PREFIX+'transcript/v1'
     if 'schema_version' in data and not canonical:
-        raise ValueError('Unknown transcript version.')
-    if not isinstance(data, dict) or not {'segments','audio_annotations'} <= set(data):
-        raise ValueError('Missing transcript arrays.')
+        raise ValidationError('unsupported_schema_version', '$.schema_version')
     for field in ('segments','audio_annotations'):
-        copy[field] = [{k:v for k,v in item.items() if k != 'id'} for item in copy.get(field, [])]
+        if field not in copy:
+            raise ValidationError('missing_field', '$.'+field)
+        if not isinstance(copy[field], list):
+            raise ValidationError('expected_array', '$.'+field)
+        cleaned = []
+        for index, item in enumerate(copy[field]):
+            if not isinstance(item, dict):
+                raise ValidationError('expected_object', f'$.{field}[{index}]')
+            cleaned.append({k:v for k,v in item.items() if k != 'id'})
+        copy[field] = cleaned
     check_schema(copy, TRANSCRIPT_SCHEMA)
     base_validate(copy)
     ids = {f'seg{i:06d}' for i in range(1,len(copy['segments'])+1)}
     speakers = {s['speaker'] for s in copy['segments']}
     for field, prefix in [('segments','seg'),('audio_annotations','ann')]:
         for i,item in enumerate(copy[field],1):
+            path = f'$.{field}[{i-1}]'
+            if item['start'] > item['end']:
+                raise ValidationError('timestamp_order', path)
             if not 0 <= item['start'] <= item['end'] <= duration+2:
-                raise ValueError('Timestamp outside source duration.')
+                raise ValidationError('timestamp_out_of_bounds', path)
             expected = f'{prefix}{i:06d}'
             if canonical and data[field][i-1].get('id') != expected:
-                raise ValueError('Invalid local ID.')
+                raise ValidationError('invalid_local_id', path+'.id')
             item['id'] = expected
-    for item in copy['audio_annotations']:
-        if len(set(item['speakers'])) != len(item['speakers']) or not set(item['speakers']) <= speakers:
-            raise ValueError('Unknown annotation speaker.')
+    for index, item in enumerate(copy['audio_annotations']):
+        path = f'$.audio_annotations[{index}].speakers'
+        if len(set(item['speakers'])) != len(item['speakers']):
+            raise ValidationError('duplicate_speakers', path)
+        for speaker_index, speaker in enumerate(item['speakers']):
+            if speaker not in speakers:
+                raise ValidationError('unknown_speaker', f'{path}[{speaker_index}]')
     for field in ('uncertainties','tone'):
-        for item in copy[field]:
-            refs(item['segment_ids'],ids)
+        for index, item in enumerate(copy[field]):
+            refs(item['segment_ids'],ids,f'$.{field}[{index}].segment_ids')
     return {'schema_version':PREFIX+'transcript/v1', **copy}
 
 def validate_analysis(data, transcript):
     if not isinstance(data, dict):
-        raise ValueError('Expected object.')
+        raise ValidationError('expected_object')
     copy = {k:v for k,v in data.items() if k != 'schema_version'}
     if data.get('schema_version', PREFIX+'analysis/v1') != PREFIX+'analysis/v1':
-        raise ValueError('Unknown analysis version.')
+        raise ValidationError('unsupported_schema_version', '$.schema_version')
     check_schema(copy, ANALYSIS_SCHEMA)
     ids = {s['id'] for s in transcript['segments']}
     speakers = {s['speaker'] for s in transcript['segments']}
-    for values in copy.values():
-        for item in values:
-            refs(item['segment_ids'],ids)
-    for item in copy['speaker_mappings']:
+    for field, values in copy.items():
+        for index, item in enumerate(values):
+            refs(item['segment_ids'],ids,f'$.{field}[{index}].segment_ids')
+    for index, item in enumerate(copy['speaker_mappings']):
         if item['speaker'] not in speakers:
-            raise ValueError('Unknown speaker.')
+            raise ValidationError('unknown_speaker', f'$.speaker_mappings[{index}].speaker')
     return {'schema_version':PREFIX+'analysis/v1', **copy}
 
 def validate_translation(data, transcript, language):
     if not isinstance(data, dict):
-        raise ValueError('Expected object.')
+        raise ValidationError('expected_object')
     copy = {k:v for k,v in data.items() if k != 'schema_version'}
     if data.get('schema_version', PREFIX+'translation/v1') != PREFIX+'translation/v1':
-        raise ValueError('Unknown translation version.')
+        raise ValidationError('unsupported_schema_version', '$.schema_version')
     check_schema(copy, TRANSLATION_SCHEMA)
-    if copy['target_language'] != language or [s['segment_id'] for s in copy['segments']] != [s['id'] for s in transcript['segments']]:
-        raise ValueError('Translation must cover every segment in order.')
+    if copy['target_language'] != language:
+        raise ValidationError('target_language_mismatch', '$.target_language')
+    if len(copy['segments']) != len(transcript['segments']):
+        raise ValidationError('translation_segment_count', '$.segments')
+    for index, (translated, original) in enumerate(zip(copy['segments'], transcript['segments'])):
+        if translated['segment_id'] != original['id']:
+            raise ValidationError('translation_segment_order', f'$.segments[{index}].segment_id')
     return {'schema_version':PREFIX+'translation/v1', **copy}
 
 def digest(path):

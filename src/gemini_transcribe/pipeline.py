@@ -16,6 +16,7 @@ import httpx
 from . import bundle
 from . import cli
 from . import speaker_names
+from .validation import diagnostic, valid_diagnostic
 
 
 class StandardClient:
@@ -108,9 +109,10 @@ def generate(client, model, stage, transcript, target):
         return bundle.validate_analysis(data,transcript) if stage == 'analysis' else bundle.validate_translation(data,transcript,target)
     except cli.TranscriptionError:
         raise
-    except (ValueError,TypeError,OverflowError):
+    except (ValueError,TypeError,OverflowError) as exc:
         error = cli.TranscriptionError(f'{stage.capitalize()} returned invalid structured output.')
         error.code = 'invalid_output'
+        error.validation = diagnostic(exc)
         raise error from None
     except Exception as exc:
         raise safe_error(exc,stage) from None
@@ -133,6 +135,8 @@ def save_manifest(directory, manifest):
 
 def error_entry(stage, exc):
     entry = {'stage':stage,'code':getattr(exc,'code','stage_failed')}
+    if isinstance(exc, cli.TranscriptionError) and hasattr(exc, 'validation'):
+        entry['validation'] = exc.validation
     status = getattr(exc,'http_status',None)
     if status:
         entry['http_status'] = status
@@ -143,6 +147,9 @@ def load_resume(path):
     path = Path(path).resolve()
     directory = path.parent
     manifest = json.loads(path.read_text())
+    for error in manifest.get('errors', []):
+        if not isinstance(error, dict) or ('validation' in error and not valid_diagnostic(error['validation'])):
+            raise ValueError('Invalid validation diagnostic.')
     if manifest.get('schema_version') != 'gemini-transcribe.bundle/v2' or manifest.get('stages',{}).get('transcription') != 'complete':
         raise ValueError('Cannot resume this manifest.')
     config = manifest['configuration']
@@ -528,6 +535,10 @@ def main(argv=None):
         else:
             print(f"{manifest['status'].capitalize()}: {directory}")
         for error in manifest.get('errors',[]):
+            detail = error.get("validation")
+            if detail:
+                print(f"Validation: {detail['reason']} at {detail['path']}" +
+                      (f" (line {detail['line']}, column {detail['column']})" if 'line' in detail else ''), file=cli.sys.stderr)
             print(f"Warning: {error['stage']}: {error['code']}"+(f" (HTTP {error['http_status']})" if 'http_status' in error else ''),file=cli.sys.stderr)
         return {'complete':0,'partial':3,'failed':1}[manifest['status']]
     except cli.TranscriptionError as exc:
