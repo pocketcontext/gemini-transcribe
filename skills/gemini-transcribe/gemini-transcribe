@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["gemini-transcribe @ git+https://github.com/pocketcontext/gemini-transcribe.git@b47b0f8dc44409e56c1bc2fc1daada36e2b7dfd5"]
+# dependencies = ["gemini-transcribe @ git+https://github.com/pocketcontext/gemini-transcribe.git@e6f955b325a7dbf7d45a64bc8eaf26ba4cbac226"]
 # ///
 """Standalone launcher for the pinned Gemini Transcribe package."""
 from gemini_transcribe.cli import main
