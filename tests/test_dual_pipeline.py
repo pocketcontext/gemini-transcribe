@@ -76,4 +76,3 @@ class DualPipelineTests(unittest.TestCase):
             self.assertEqual(pipeline.main(['--export',receipt['manifest_path'],'--output-dir',str(self.root/'exports'),'--json']),0)
 
 if __name__ == '__main__': unittest.main()
-
