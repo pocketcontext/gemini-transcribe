@@ -192,4 +192,7 @@ def export_stage(directory, stage, data, transcript=None):
                 lines += ['None identified.']
             lines += ['']
         entries += [('analysis.md','analysis_md','\n'.join(lines),'text/markdown')]
+    if any(media == 'application/json' and len(content.encode('utf-8')) > 8 * 1024 * 1024
+           for _, _, content, media in entries):
+        raise ValueError('JSON artifact exceeds the 8 MiB bundle limit.')
     return [artifact(directory,*entry) for entry in entries]
