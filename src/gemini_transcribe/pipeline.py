@@ -1,5 +1,7 @@
 """Two-phase generation and restartable immutable evidence bundles."""
 import argparse
+import copy
+import time
 import fcntl
 from datetime import datetime, timezone
 from importlib.metadata import version
@@ -14,6 +16,55 @@ import httpx
 from . import bundle
 from . import cli
 from . import speaker_names
+
+
+class StandardClient:
+    """Collect safe Interactions usage without retaining provider content."""
+    def __init__(self, client):
+        self.client, self.files, self.interactions = client, client.files, self
+        self.events = []
+        self.extraction_metadata = {
+            'schema_version': 'gemini-transcribe.generation/v1', 'pipeline': 'standard',
+            'api': 'interactions', 'sdk_version': version('google-genai'),
+            'settings': {'automatic_retries': False, 'request_timeout_seconds': 600}}
+
+    def create(self, **kwargs):
+        started = time.monotonic()
+        try:
+            result = self.client.interactions.create(**kwargs)
+        except Exception as exc:
+            self.events.append({'hop': 1, 'status': 'failed', 'error_code': safe_error(exc, 'generation').code,
+                                'elapsed_seconds': time.monotonic()-started})
+            raise
+        usage = cli._get(result, 'usage')
+        counts = {}
+        for source, target in [('total_input_tokens','prompt_token_count'),
+                               ('total_output_tokens','candidates_token_count'),
+                               ('total_cached_tokens','cached_content_token_count'),
+                               ('total_thought_tokens','thoughts_token_count'),
+                               ('total_tokens','total_token_count')]:
+            value = cli._get(usage, source)
+            if type(value) is int and value >= 0:
+                counts[target] = value
+        self.events.append({'hop': 1, 'status': 'received',
+                            'finish_reason': 'STOP' if cli._get(result,'status') == 'completed' else 'OTHER',
+                            'usage': counts, 'elapsed_seconds': time.monotonic()-started})
+        return result
+
+
+def record_attempt(manifest, client, stage, start):
+    generation = manifest['configuration'].get('generation')
+    if not generation:
+        return
+    events = vars(client).get('events', [])[start:]
+    hops = [{k:v for k,v in event.items() if k != 'call'} for event in events]
+    generation.setdefault('stages', {}).setdefault(stage, []).append({
+        'status': manifest['stages'][stage], 'hops': hops,
+        'continuation_count': sum(h.get('finish_reason') == 'CONTINUATION' for h in hops)})
+
+
+def event_count(client):
+    return len(vars(client).get('events', []))
 
 
 def safe_error(exc, stage):
@@ -204,6 +255,10 @@ def _process(args, client, directory=None):
     if args.resume:
         try:
             directory, manifest, transcript = load_resume(args.resume)
+            metadata = vars(client).get('extraction_metadata', {})
+            saved = manifest['configuration'].get('generation', {})
+            if {k:v for k,v in saved.items() if k != 'stages'} != metadata and not (not saved and metadata.get('pipeline') == 'standard'):
+                raise ValueError('Resume API or configuration differs from generation provenance.')
         except (ValueError, TypeError, KeyError, OSError, AttributeError):
             raise cli.TranscriptionError(
                 'Cannot resume: bundle metadata or artifact integrity validation failed.',
@@ -219,7 +274,13 @@ def _process(args, client, directory=None):
             'extraction':{'provider':'google','model':args.model,'package_version':version('gemini-transcribe'),'prompt_version':'1','store':False},
             'configuration':{'translation_language':args.translation_language,'language_hint':args.language},
             'stages':{'transcription':'failed','analysis':'skipped' if args.transcript_only else 'failed','translation':'skipped' if args.transcript_only else 'failed'},'artifacts':[],'errors':[]}
+        metadata = vars(client).get('extraction_metadata', {})
+        if set(metadata) & {'provider', 'model', 'package_version', 'prompt_version', 'store'}:
+            raise ValueError('Client metadata cannot replace extraction identity.')
+        if metadata:
+            manifest['configuration']['generation'] = copy.deepcopy(metadata)
         save_manifest(directory,manifest)
+        attempt_start = event_count(client)
         try:
             transcript = cli.transcribe(client,args.audio,args.model,args.language,duration=source['duration_seconds'])
             # Detect local modifications while upload/generation was in progress.
@@ -227,15 +288,18 @@ def _process(args, client, directory=None):
                 raise cli.TranscriptionError('Source changed during transcription.', 'source_changed')
             manifest['artifacts'] += export_stage(directory,'transcript',transcript)
             manifest['stages']['transcription'] = 'complete'
+            record_attempt(manifest, client, 'transcription', attempt_start)
             save_manifest(directory,manifest)
         except Exception as exc:
             manifest['errors'].append(error_entry('transcription',exc))
+            record_attempt(manifest, client, 'transcription', attempt_start)
             save_manifest(directory,manifest)
             return directory,manifest
     for stage in ('analysis','translation'):
         if manifest['stages'][stage] in ('complete','skipped'):
             continue
         manifest['errors'] = [e for e in manifest.get('errors',[]) if e['stage'] != stage]
+        attempt_start = event_count(client)
         try:
             data = generate(client,manifest['extraction']['model'],stage,transcript,manifest['configuration']['translation_language'])
             new = export_stage(directory,stage,data,transcript)
@@ -244,6 +308,7 @@ def _process(args, client, directory=None):
         except Exception as exc:
             manifest['errors'].append(error_entry(stage,exc))
             manifest['stages'][stage] = 'failed'
+        record_attempt(manifest, client, stage, attempt_start)
         save_manifest(directory,manifest)
     if manifest['stages']['analysis'] == 'complete' and presentations_need_refresh(directory, manifest, transcript):
         # Copy-on-write keeps the resumable evidence bundle valid if presentation export fails.
@@ -326,13 +391,87 @@ class UsageParser(argparse.ArgumentParser):
         raise ValueError('Invalid command-line arguments.')
 
 
+def resolve_generation(args):
+    for label in (args.model, args.translation_language):
+        if label is not None and (not label.strip() or len(label) > 100):
+            raise ValueError('Invalid label.')
+    options = ('max_output_tokens','deadline_seconds','request_timeout_seconds','max_hops')
+    defaults = dict(zip(options, (131072,1800,1200,16)))
+    if args.export:
+        if args.pipeline is not None or args.model is not None or any(getattr(args,key) is not None for key in options):
+            raise ValueError('Export has no generation options.')
+        args.pipeline, args.model = 'standard', cli.DEFAULT_MODEL
+        args.translation_language = args.translation_language or 'English'
+        return
+    saved = None
+    if args.resume:
+        try:
+            descriptor = os.open(Path(args.resume).resolve().parent, os.O_RDONLY)
+            try:
+                lock_bundle(descriptor)
+                _, saved, _ = load_resume(args.resume)
+            finally:
+                os.close(descriptor)
+        except cli.TranscriptionError:
+            raise
+        except (ValueError, KeyError, TypeError, OSError):
+            raise cli.TranscriptionError('Cannot resume: bundle validation failed.', 'resume_invalid') from None
+        generation = saved['configuration'].get('generation', {})
+        if generation and generation.get('schema_version') != 'gemini-transcribe.generation/v1':
+            raise ValueError('Unsupported prototype generation metadata; export only.')
+        pipeline = generation.get('pipeline', 'standard')
+        if pipeline not in ('standard', 'long-decode'):
+            raise ValueError('Unknown saved pipeline.')
+        if args.pipeline is not None and args.pipeline != pipeline:
+            raise ValueError('Pipeline conflict.')
+        args.pipeline = pipeline
+        model = saved['extraction']['model']
+        if args.model is not None and args.model != model:
+            raise ValueError('Model conflict.')
+        args.model = model
+        for name, key in [('language','language_hint'),('translation_language','translation_language')]:
+            supplied = getattr(args,name)
+            recorded = saved['configuration'].get(key)
+            if supplied is not None and supplied != recorded:
+                raise ValueError('Language conflict.')
+            setattr(args,name,recorded)
+        if args.transcript_only:
+            raise ValueError('Cannot change stages on resume.')
+        defaults = {key:generation.get('settings',{}).get(key,value) for key,value in defaults.items()}
+    args.pipeline = args.pipeline or 'standard'
+    args.model = args.model or os.environ.get('GEMINI_MODEL') or ('gemini-4-argon' if args.pipeline == 'long-decode' else cli.DEFAULT_MODEL)
+    args.translation_language = args.translation_language or 'English'
+    if args.pipeline == 'long-decode' and args.model != 'gemini-4-argon':
+        raise ValueError('Long decode requires Argon.')
+    if args.pipeline == 'standard' and args.model == 'gemini-4-argon':
+        raise ValueError('Argon requires long decode.')
+    args.generation_settings = {}
+    for key,value in defaults.items():
+        supplied = getattr(args,key)
+        if supplied is not None and (args.pipeline != 'long-decode' or (saved and supplied != value)):
+            raise ValueError('Generation setting conflict.')
+        args.generation_settings[key] = value if supplied is None else supplied
+    if args.pipeline == 'long-decode':
+        import math
+        settings = args.generation_settings
+        if not 1 <= settings['max_output_tokens'] <= 1048576 or not 1 <= settings['max_hops'] <= 64 or any(not math.isfinite(settings[k]) or settings[k] <= 0 for k in ('deadline_seconds','request_timeout_seconds')) or settings['request_timeout_seconds'] > 1200:
+            raise ValueError('Invalid generation limits.')
+    if args.export and (args.pipeline != 'standard' or any(getattr(args,key) is not None for key in options)):
+        raise ValueError('Export is offline.')
+
+
 def main(argv=None):
     parser = UsageParser(description='Transcribe and analyze audio into a portable evidence bundle.')
     parser.add_argument('audio',type=Path,nargs='?')
     parser.add_argument('--output-dir',type=Path,default=Path('transcripts'))
-    parser.add_argument('--model',default=os.environ.get('GEMINI_MODEL',cli.DEFAULT_MODEL))
+    parser.add_argument('--model')
+    parser.add_argument('--pipeline', choices=('standard','long-decode'), help='Generation pipeline (default: standard); long-decode is experimental.')
+    parser.add_argument('--max-output-tokens', type=int)
+    parser.add_argument('--deadline-seconds', type=float)
+    parser.add_argument('--request-timeout-seconds', type=float)
+    parser.add_argument('--max-hops', type=int)
     parser.add_argument('--language')
-    parser.add_argument('--translation-language',default='English')
+    parser.add_argument('--translation-language')
     parser.add_argument('--transcript-only',action='store_true')
     parser.add_argument('--resume',type=Path,metavar='MANIFEST')
     parser.add_argument('--export', type=Path, metavar='MANIFEST', help='Regenerate named presentations offline in a new bundle.')
@@ -354,6 +493,12 @@ def main(argv=None):
         return fail('Provide an audio path, --resume MANIFEST or --export MANIFEST, exclusively.')
     if args.speaker_overrides and not args.export:
         return fail('--speaker-overrides requires --export.')
+    try:
+        resolve_generation(args)
+    except cli.TranscriptionError as exc:
+        return fail(str(exc),1,exc.code,'resume')
+    except (ValueError, KeyError, TypeError, OSError):
+        return fail('Pipeline/model settings are unsupported or conflict with the saved bundle.', error_code='invalid_configuration')
     key = os.environ.get('GEMINI_API_KEY','').strip()
     if not args.export and (not key or any(word in key.lower() for word in ('placeholder','your_api','your-api','replace','changeme'))):
         return fail('Set GEMINI_API_KEY to a real API key.')
@@ -370,7 +515,11 @@ def main(argv=None):
         else:
             with cli.genai.Client(api_key=key,http_options=cli.types.HttpOptions(timeout=600000,retry_options=cli.types.HttpRetryOptions(attempts=1))) as client:
                 client.interactions.sdk_configuration.retry_config = None
-                directory, manifest = process(args,client)
+                selected = StandardClient(client)
+                if args.pipeline == 'long-decode':
+                    from .long_decode import LongDecodeClient
+                    selected = LongDecodeClient(client, **args.generation_settings)
+                directory, manifest = process(args,selected)
         receipt = {'status':manifest['status'],'manifest_path':str(directory/'manifest.json'),'stages':manifest['stages']}
         if manifest.get('errors'):
             receipt['errors'] = manifest['errors']

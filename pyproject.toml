@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gemini-transcribe"
-version = "0.3.0"
+version = "0.4.0"
 description = "Transcribe audio with Gemini and speaker labels"
 requires-python = ">=3.12"
-dependencies = ["google-genai==2.30.0"]
+dependencies = ["google-genai==2.30.1"]
 
 [project.scripts]
 gemini-transcribe = "gemini_transcribe.cli:main"

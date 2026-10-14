@@ -4,7 +4,9 @@ A small Python command-line application that sends an audio file directly to
 Gemini and produces a versioned evidence bundle: transcript, speaker labels,
 timestamps, audio observations, summary, topics, decisions, actions, questions,
 speaker-name mappings and translation. The default
-model is `gemini-3.8-flash`; override it with `GEMINI_MODEL` or `--model`.
+standard pipeline model is `gemini-3.8-flash`; override it with `GEMINI_MODEL` or `--model`.
+The opt-in experimental `--pipeline long-decode` uses `gemini-4-argon` and
+bounded manual GenerateContent continuation. Both produce the same evidence bundle.
 
 ## Setup
 
@@ -47,6 +49,7 @@ Inside the devenv shell (including direnv), use the provided command:
 gemini-transcribe audio/interview.mp3
 gemini-transcribe audio/interview.wav --language Italian
 gemini-transcribe audio/interview.mp3 --output-dir transcripts
+gemini-transcribe audio/interview.ogg --pipeline long-decode --json
 ```
 
 The wrapper uses this project's locked dependencies while preserving your current
@@ -70,7 +73,7 @@ the transcript. Summaries and other analyses are separate, segment-linked artifa
 Unstated owners/deadlines remain null; speaker names can be tentative and tone is
 explicitly subjective.
 
-Interactions requests explicitly use `store=False`, including resumed enrichment.
+Standard-pipeline Interactions requests explicitly use `store=False`, including resumed enrichment.
 This opts out of interaction storage; it does not change Google's other data-use
 terms. Version 2 bundles retain their original `extraction.store` flag on resume;
 resuming does not delete any previously stored results. Version 1 bundles are
@@ -98,7 +101,13 @@ Incomplete or invalid structured responses are never marked complete. Timestamp 
 establish that the model heard every word or assigned every speaker correctly.
 Check a representative recording before relying on the results.
 
-This version processes one whole recording per request. It does not split long
+Both pipelines process a whole recording without audio chunking. Long decode may
+continue generation across multiple requests. See [pipeline limits and recovery](docs/local-long-decode.md).
+Resume infers pipeline/model/limits from the manifest and rejects conflicting flags.
+Reported usage and continuation counts are saved per stage attempt; missing counts
+are unavailable. No pipeline fallback or automatic budget increase occurs.
+
+This version processes one whole recording as input. It does not split long
 audio or reconcile speaker identities across recordings. Very long recordings
 can exceed model input/output limits. SRT timestamps are model estimates, not
 forced word alignment, and overlapping speech can produce overlapping cues.
@@ -180,7 +189,7 @@ uv build
 ```
 
 The SDK is pinned because its Files and Interactions clients interpret retry
-settings differently. The CLI explicitly disables Interactions retries; preserve
+settings differently. The CLI explicitly disables retries on both APIs; preserve
 that behavior and its transport test when upgrading.
 
 Tests use synthetic responses and mocked clients; no credentials or network

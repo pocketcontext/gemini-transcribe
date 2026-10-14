@@ -23,3 +23,20 @@ bundle. Optional `--speaker-overrides JSON` accepts reviewed corrections with re
 in the versioned speaker_names format documented in the output-format reference.
 Do not promote tentative identities without review. Keep correction files private.
 Corrected Wiki imports need a new version; historical evidence must not be rewritten.
+
+## Pipeline selection and usage
+
+`--pipeline standard` is the default. Explicitly select experimental
+`--pipeline long-decode` for Argon GenerateContent manual continuation. It defaults
+to 131,072 output/thinking tokens, 16 hops, a 1,800-second deadline per stage and
+a 1,200-second timeout per request. No retries, fallback or budget increases occur.
+Resume infers saved settings and rejects conflicts; offline export needs no key.
+
+New manifests keep the five-field extraction contract and add optional
+`configuration.generation` (`gemini-transcribe.generation/v1`): pipeline, api,
+sdk_version, settings and stages. Stage values are arrays of attempts with status,
+continuation_count and safe hops. Hop usage contains only actually reported counts;
+missing counts are unavailable. Resume appends attempts without erasing failed
+request usage. No provider text or continuation tokens are stored in metadata.
+WikiContext imports the same bundle; use distinct extraction version labels and
+review evidence before explicitly changing a published selection.

@@ -33,3 +33,20 @@ wikicontext --space companyspace001 ingest /path/to/recording.m4a \
 The importer verifies source/artifact hashes and evidence references before writing. It does not invoke Gemini or Groq or convert the audio. Its source limit is 100 MiB, smaller than this CLI's input limit. Keep oversized original recordings intact and report the limit; do not silently substitute a compressed copy for the hashed original.
 
 Use returned source, rendition and passage IDs, including `segment_passages`, `annotation_passages` and `observation_passages`, when reviewing evidence and staging citations. One segment may map to several passages. Preserve analytical artifacts and presentations, but don't count them as independent corroborating sources for speech. Review the actual passages, reconcile existing published knowledge, and stage/publish cited revisions through WikiContext. The import receipt reports extraction, not publication. Corrected evidence uses a new extraction/version; repeated identical imports can resume without duplicating evidence.
+
+## Pipeline selection and usage
+
+`--pipeline standard` is the default. Explicitly select experimental
+`--pipeline long-decode` for Argon GenerateContent manual continuation. It defaults
+to 131,072 output/thinking tokens, 16 hops, a 1,800-second deadline per stage and
+a 1,200-second timeout per request. No retries, fallback or budget increases occur.
+Resume infers saved settings and rejects conflicts; offline export needs no key.
+
+New manifests keep the five-field extraction contract and add optional
+`configuration.generation` (`gemini-transcribe.generation/v1`): pipeline, api,
+sdk_version, settings and stages. Stage values are arrays of attempts with status,
+continuation_count and safe hops. Hop usage contains only actually reported counts;
+missing counts are unavailable. Resume appends attempts without erasing failed
+request usage. No provider text or continuation tokens are stored in metadata.
+WikiContext imports the same bundle; use distinct extraction version labels and
+review evidence before explicitly changing a published selection.
