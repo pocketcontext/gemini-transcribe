@@ -117,9 +117,7 @@ def validate_transcript(data, duration):
     for field, prefix in [('segments','seg'),('audio_annotations','ann')]:
         for i,item in enumerate(copy[field],1):
             path = f'$.{field}[{i-1}]'
-            if item['start'] > item['end']:
-                raise ValidationError('timestamp_order', path)
-            if not 0 <= item['start'] <= item['end'] <= duration+2:
+            if not all(0 <= item[t] <= duration+2 for t in ('start', 'end')):
                 raise ValidationError('timestamp_out_of_bounds', path)
             expected = f'{prefix}{i:06d}'
             if canonical and data[field][i-1].get('id') != expected:
@@ -136,6 +134,37 @@ def validate_transcript(data, duration):
         for index, item in enumerate(copy[field]):
             refs(item['segment_ids'],ids,f'$.{field}[{index}].segment_ids')
     return {'schema_version':PREFIX+'transcript/v1', **copy}
+
+def exact_metadata(actual, expected):
+    """Compare JSON metadata without Python's boolean/number coercion."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return actual.keys() == expected.keys() and all(
+            exact_metadata(actual[key], value) for key, value in expected.items())
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            exact_metadata(a, e) for a, e in zip(actual, expected))
+    return actual == expected
+
+
+def timing_review(transcript):
+    """Derive content-free review warnings without altering evidence order or IDs."""
+    warnings = []
+    for field, prefix in [('segments', 'seg'), ('audio_annotations', 'ann')]:
+        previous = None
+        for index, item in enumerate(transcript.get(field, [])):
+            detail = {'path': f'$.{field}[{index}]', 'index': index,
+                      'id': f'{prefix}{index+1:06d}', 'start': item['start'], 'end': item['end']}
+            if item['start'] > item['end']:
+                warnings.append({'reason': 'timestamp_reversed', **detail})
+            if field == 'segments' and previous is not None and item['start'] < previous['start']:
+                warnings.append({'reason': 'timestamp_backward', **detail,
+                    'previous_id': f'seg{index:06d}', 'previous_start': previous['start'],
+                    'backward_seconds': previous['start'] - item['start']})
+            previous = item
+    return {'status': 'required' if warnings else 'not_required', 'warnings': warnings}
+
 
 def validate_analysis(data, transcript):
     if not isinstance(data, dict):

@@ -41,11 +41,10 @@ class TranscriptTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     cli.validate_transcript(data)
 
-    def test_out_of_order_segments_are_rejected(self):
+    def test_out_of_order_segments_are_preserved(self):
         data = transcript()
         data["segments"].reverse()
-        with self.assertRaises(ValueError):
-            cli.validate_transcript(data)
+        self.assertEqual(cli.validate_transcript(data), data)
 
     def test_missing_structure_is_rejected(self):
         for data in [None, [], {}, {"language": "English"},

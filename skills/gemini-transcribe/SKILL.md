@@ -40,3 +40,16 @@ missing counts are unavailable. Resume appends attempts without erasing failed
 request usage. No provider text or continuation tokens are stored in metadata.
 WikiContext imports the same bundle; use distinct extraction version labels and
 review evidence before explicitly changing a published selection.
+
+## Timing review
+
+Inspect `timing_review` in the receipt and manifest. `required` means extraction
+was preserved with backward segment starts or reversed intervals. Do not treat
+`complete` as permission to publish without reviewing affected passages against
+the audio. For localized warnings, listen around the reported timestamps and
+neighbouring stable segment IDs; for repeated jumps or resets, review the broader
+section. Preserve original order, IDs and timestamps. Record corrections only in
+a reviewed derivative with provenance; unresolved reversed ranges have unavailable
+timing and must not become playback links or subtitle cues. SRT omits reversed
+cues but TXT/JSON retain their text. No automatic retranscription or retry follows
+a warning. Invalid numeric, negative and out-of-duration timestamps remain fatal.

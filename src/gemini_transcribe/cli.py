@@ -46,7 +46,6 @@ def validate_transcript(data):
     segments = data.get("segments")
     if not isinstance(segments, list):
         raise ValidationError("expected_array", "$.segments")
-    previous = -1
     for index, segment in enumerate(segments):
         path = f"$.segments[{index}]"
         if not isinstance(segment, dict):
@@ -55,9 +54,6 @@ def validate_transcript(data):
         if any(isinstance(t, bool) or not isinstance(t, (int, float)) or
                not math.isfinite(t) or t < 0 for t in (start, end)):
             raise ValidationError("invalid_timestamp", path)
-        if start > end or start < previous:
-            raise ValidationError("timestamp_order", path)
-        previous = start
         if not isinstance(segment.get("speaker"), str) or not re.fullmatch(
                 r"(?:SPEAKER_(?:0[1-9]|[1-9][0-9]+)|UNKNOWN)", segment["speaker"]):
             raise ValidationError("invalid_speaker_label", path+".speaker")
@@ -76,7 +72,7 @@ def timestamp(seconds, separator="."):
 
 def render_txt(data, names=None):
     from .speaker_names import label
-    return "\n".join(f"[{timestamp(s['start'])} – {timestamp(s['end'])}] "
+    return "\n".join((f"[{timestamp(s['start'])} – {timestamp(s['end'])}] " if s['start'] <= s['end'] else "[timing unavailable; review required] ") +
                      f"{label(s['speaker'], names)}: {s['text']}" for s in data["segments"]) + "\n"
 
 
@@ -85,7 +81,7 @@ def render_srt(data, names=None):
     return "\n\n".join(f"{i}\n{timestamp(s['start'], ',')} --> "
                        f"{timestamp(s['end'], ',')}\n{label(s['speaker'], names)}: "
                        + " ".join(s['text'].split())
-                       for i, s in enumerate(data["segments"], 1)) + "\n"
+                       for i, s in enumerate((s for s in data["segments"] if s["start"] <= s["end"]), 1)) + "\n"
 
 
 def _get(obj, field, default=None):

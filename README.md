@@ -97,7 +97,7 @@ saved before enrichment. If enrichment fails, the run is
 partial and retains its valid transcript. Resume with
 `gemini-transcribe --resume /path/to/run/manifest.json --json` to retry incomplete
 enrichment without reuploading the audio or regenerating completed stages.
-Incomplete or invalid structured responses are never marked complete. Timestamp and format validation cannot
+Incomplete or structurally invalid responses are never marked complete. Reversed intervals and backward segment starts preserve the transcript with `timing_review.status: required`; complete extraction does not mean reviewed publication. Timestamp and format validation cannot
 establish that the model heard every word or assigned every speaker correctly.
 Check a representative recording before relying on the results.
 
@@ -162,8 +162,18 @@ Unknown fields are reported at their containing object without printing their
 names. Unexpected validator exceptions use `invalid_structure` at `$` rather than
 exposing their messages. No rejected values, transcript text or raw provider
 response are retained in diagnostics. These diagnostics apply to both pipelines
-and all generation stages; validation remains strict and no retry is added.
+and all generation stages; structural, numeric and duration validation remains strict and no retry is added.
 Old failed manifests cannot recover details that were never saved.
+
+Timing anomalies are warnings, not failed extraction: segment starts earlier than the
+preceding start and reversed segment/annotation intervals are preserved in original
+order with stable IDs. The manifest and JSON receipt include deterministic
+`timing_review` metadata with content-free timestamp diagnostics. Review affected
+passages against the audio before publication; broad resets require broader review.
+TXT marks reversed intervals as timing unavailable and SRT omits those cues (a
+recording with no valid cues produces an empty presentation). No timestamps are
+silently sorted or repaired. Negative, nonfinite, nonnumeric and out-of-duration
+timestamps remain fatal. Complete means extraction completed, not timing approved.
 
 No raw provider response is dumped. Timestamp validity does not establish accuracy.
 

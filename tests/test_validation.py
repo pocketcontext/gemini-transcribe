@@ -1,4 +1,5 @@
 """Validation failures identify safe locations without retaining provider content."""
+import copy
 import io
 import json
 import os
@@ -19,7 +20,6 @@ class ValidationTests(unittest.TestCase):
             ('expected_object', '$.segments[0]', lambda d: d['segments'].__setitem__(0, 'SECRET')),
             ('expected_array', '$.audio_annotations', lambda d: d.update(audio_annotations=None)),
             ('expected_finite_number', '$.segments[0].start', lambda d: d['segments'][0].update(start=True)),
-            ('timestamp_order', '$.segments[0]', lambda d: d['segments'][0].update(start=1.5)),
             ('invalid_speaker_label', '$.segments[0].speaker', lambda d: d['segments'][0].update(speaker='SECRET')),
             ('timestamp_out_of_bounds', '$.segments[0]', lambda d: d['segments'][0].update(end=999)),
             ('invalid_enum', '$.tone[0].subjective', lambda d: d['tone'][0].update(subjective=False)),
@@ -36,6 +36,69 @@ class ValidationTests(unittest.TestCase):
                     bundle.validate_transcript(data, 2)
                 self.assertEqual(diagnostic(caught.exception), {'reason': reason, 'path': path})
                 self.assertNotIn('SECRET', str(caught.exception))
+
+    def test_timing_warnings_preserve_evidence_and_safe_exports(self):
+        data = test_bundle.transcript()
+        data['segments'] = [
+            {'start': 15, 'end': 10, 'speaker': 'SPEAKER_01', 'text': 'PRIVATE first'},
+            {'start': 9, 'end': 12, 'speaker': 'SPEAKER_01', 'text': 'PRIVATE second'}]
+        data['audio_annotations'][0].update(start=5, end=4)
+        canonical = bundle.validate_transcript(data, 20)
+        review = bundle.timing_review(canonical)
+        self.assertEqual(review['status'], 'required')
+        self.assertEqual([w['reason'] for w in review['warnings']],
+                         ['timestamp_reversed', 'timestamp_backward', 'timestamp_reversed'])
+        self.assertEqual(review['warnings'][1], {
+            'reason': 'timestamp_backward', 'path': '$.segments[1]', 'index': 1,
+            'id': 'seg000002', 'start': 9, 'end': 12, 'previous_id': 'seg000001',
+            'previous_start': 15, 'backward_seconds': 6})
+        self.assertNotIn('PRIVATE', json.dumps(review))
+        self.assertEqual([s['start'] for s in canonical['segments']], [15, 9])
+        self.assertNotIn('PRIVATE first', cli.render_srt(canonical))
+        self.assertIn('PRIVATE second', cli.render_srt(canonical))
+        self.assertIn('timing unavailable; review required', cli.render_txt(canonical))
+        self.assertEqual(cli.render_srt({'segments': canonical['segments'][:1]}), '\n')
+
+    def test_warning_bundle_survives_export_resume_and_rejects_tampering(self):
+        fixture = test_bundle.BundleTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        data = test_bundle.transcript()
+        data['segments'][0].update(start=1.5)
+        fixture.args.transcript_only = True
+        fixture.client.interactions.create.return_value = test_bundle.response(data)
+        directory, manifest = fixture.process()
+        self.assertEqual(manifest['status'], 'complete')
+        self.assertEqual(manifest['timing_review']['status'], 'required')
+        self.assertEqual(manifest['errors'], [])
+        pipeline.load_resume(directory/'manifest.json')
+        fixture.client.interactions.create.assert_called_once()
+        fixture.client.files.delete.assert_called_once()
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, {'GEMINI_API_KEY': 'synthetic-test-key'}), \
+             patch.object(cli.genai, 'Client'), patch.object(pipeline, 'process', return_value=(directory, manifest)), \
+             patch('sys.stdout', stdout), patch('sys.stderr', stderr):
+            status = pipeline.main([str(fixture.audio), '--json'])
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(stdout.getvalue())['timing_review'], manifest['timing_review'])
+        self.assertIn('timestamp review required', stderr.getvalue())
+        exported, copied = pipeline.export_copy(directory/'manifest.json', directory/'copies')
+        self.assertEqual(copied['timing_review'], manifest['timing_review'])
+        original_review = copy.deepcopy(manifest['timing_review'])
+        for key, value in [('index', False), ('end', True), ('start', '1.5')]:
+            manifest['timing_review'] = copy.deepcopy(original_review)
+            manifest['timing_review']['warnings'][0][key] = value
+            bundle.write_json(directory/'manifest.json', manifest)
+            with self.assertRaisesRegex(ValueError, 'timing review'):
+                pipeline.load_resume(directory/'manifest.json')
+        manifest['timing_review'] = original_review
+        manifest['timing_review']['warnings'] = []
+        bundle.write_json(directory/'manifest.json', manifest)
+        with self.assertRaisesRegex(ValueError, 'timing review'):
+            pipeline.load_resume(directory/'manifest.json')
+        del manifest['timing_review']
+        bundle.write_json(directory/'manifest.json', manifest)
+        self.assertEqual(pipeline.load_resume(directory/'manifest.json')[1]['timing_review']['status'], 'required')
 
     def test_json_and_untyped_exception_never_expose_messages(self):
         try:

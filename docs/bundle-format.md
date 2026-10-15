@@ -25,7 +25,7 @@ transcript.json:
 - audio_annotations: [{id: "ann000001" sequential local, start,end: as above, kind: laughter|pause|overlap|background_noise|other, description: nonempty string, speakers: known speaker ID list (can be empty)}]
 - uncertainties: [{segment_ids: nonempty list of known segment IDs, kind: wording|speaker|timing|other, description: string}]
 - tone: [{segment_ids: nonempty known IDs, label: string, cues: string, subjective: true}]
-All arrays required, allowed empty. Ordered segment start, overlap allowed. Audio-based annotations/tone come from original audio step. All refs validated. Chunking long passages retains original segment ref mapping to list of passage IDs.
+All arrays required, allowed empty. Original segment order retained, overlap allowed. Backward starts and reversed intervals produce review warnings; invalid numeric, negative and out-of-duration timestamps remain fatal. Audio-based annotations/tone come from original audio step. All refs validated. Chunking long passages retains original segment ref mapping to list of passage IDs.
 
 analysis.json:
 - schema_version: "gemini-transcribe.analysis/v1"
@@ -103,3 +103,25 @@ missing counts are unavailable. Resume appends attempts without erasing failed
 request usage. No provider text or continuation tokens are stored in metadata.
 WikiContext imports the same bundle; use distinct extraction version labels and
 review evidence before explicitly changing a published selection.
+
+## Timestamp review warnings
+
+New manifests and JSON receipts include `timing_review` with `status` (`required`
+or `not_required`) and `warnings`. The transcript schema and stable IDs remain
+unchanged. Each warning has `reason` (`timestamp_reversed` or
+`timestamp_backward`), `path`, zero-based `index`, `id`, `start` and `end`.
+Backward warnings additionally contain `previous_id`, `previous_start` and
+`backward_seconds`. Reversed intervals apply to segments and annotations;
+backward starts apply to segments. Warnings follow segment then annotation array
+order, with reversed before backward for a single item. They contain no spoken
+text. Resume recomputes warnings, rejects inconsistent supplied metadata, and
+accepts legacy manifests without this optional field.
+
+Warnings preserve extraction and enrichment but require review before publication.
+Listen around localized issues; inspect broader sections for repeated resets.
+Preserve original evidence and record any reviewed corrections separately.
+TXT marks reversed intervals as timing unavailable; SRT omits those cues and is
+newline-only if there are no valid cues, as for silent recordings. Downstream
+playback locators must not expose reversed ranges. Importers independently
+recompute warnings instead of trusting a claimed review status. This metadata
+records a need for review, never an assertion that a human approved the result.
