@@ -92,7 +92,7 @@ identity or independently corroborate the recording.
 `--pipeline standard` is the default. Explicitly select experimental
 `--pipeline long-decode` for Argon GenerateContent manual continuation. It defaults
 to 131,072 output/thinking tokens, 16 hops, a 1,800-second deadline per stage and
-a 1,200-second timeout per request. No retries, fallback or budget increases occur.
+a 1,200-second timeout per request. The CLI performs no implicit retries, fallback or budget increases.
 Resume infers saved settings and rejects conflicts; offline export needs no key.
 
 New manifests keep the five-field extraction contract and add optional
@@ -125,3 +125,7 @@ newline-only if there are no valid cues, as for silent recordings. Downstream
 playback locators must not expose reversed ranges. Importers independently
 recompute warnings instead of trusting a claimed review status. This metadata
 records a need for review, never an assertion that a human approved the result.
+
+Agent-initiated paid retries follow the
+[bounded retry policy](../skills/gemini-transcribe/references/retries.md). An
+authorized workflow includes up to three retries without renewed approval.

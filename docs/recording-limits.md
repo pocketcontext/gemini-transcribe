@@ -43,3 +43,7 @@ representative speech, the intended model and the intended enrichment settings:
 Until that benchmark exists, process a representative short recording first and
 review its outputs before committing a large collection. No arbitrary smaller
 byte limit can replace this measurement.
+
+Agent-initiated paid retries follow the
+[bounded retry policy](../skills/gemini-transcribe/references/retries.md). An
+authorized workflow includes up to three retries without renewed approval.

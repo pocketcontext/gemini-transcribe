@@ -90,8 +90,10 @@ Audio and generated transcripts in the standard `audio/` and `transcripts/`
 directories are ignored by Git. Custom output paths outside those directories
 are your responsibility.
 
-There are no automatic generation retries: rerunning can incur another API
-charge. The first request transcribes audio and records acoustic observations;
+The CLI/SDK do not retry generation automatically. An authorized agent workflow
+includes up to three paid retry invocations without renewed approval; see the
+[retry policy](skills/gemini-transcribe/references/retries.md). Rerunning can incur
+another API charge. The first request transcribes audio and records acoustic observations;
 separate requests analyze and translate the saved transcript. Transcription is
 saved before enrichment. If enrichment fails, the run is
 partial and retains its valid transcript. Resume with

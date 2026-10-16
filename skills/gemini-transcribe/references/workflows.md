@@ -1,5 +1,8 @@
 # Workflows
 
+Follow the [paid API retry policy](retries.md): up to three agent-initiated
+retries per authorized recording workflow require no renewed approval.
+
 ## Generate and review
 
 ```sh
@@ -16,7 +19,7 @@ To retry incomplete enrichment, use the existing manifest:
 gemini-transcribe --resume /path/to/run/manifest.json --json
 ```
 
-Resume reuses completed stages; it must not be presented as retranscribing or verifying speech. A new transcription requires the original file and creates a new extraction. Automatic generation retries are disabled; an explicit retry can incur API charges. If a retry fails, report the safe stage/status and preserve the bundle rather than looping indefinitely.
+Resume reuses completed stages; it must not be presented as retranscribing or verifying speech. A new transcription requires the original file and creates a new extraction. CLI/SDK generation retries are disabled. The agent may explicitly retry under the bounded retry policy without renewed approval; preserve evidence and report safe diagnostics and the remaining retry count.
 
 Compare doubtful names, numbers and speaker changes with the original audio. Generated speaker mappings are evidence-backed proposals; labels are local to this extraction. Timestamps are model estimates. Audio observations describe sound; tone is a subjective interpretation of audible cues. Do not replace the original transcript with a translation or summary.
 
@@ -39,7 +42,7 @@ Use returned source, rendition and passage IDs, including `segment_passages`, `a
 `--pipeline standard` is the default. Explicitly select experimental
 `--pipeline long-decode` for Argon GenerateContent manual continuation. It defaults
 to 131,072 output/thinking tokens, 16 hops, a 1,800-second deadline per stage and
-a 1,200-second timeout per request. No retries, fallback or budget increases occur.
+a 1,200-second timeout per request. The CLI performs no implicit retries, fallback or budget increases; agent retries follow the bounded retry policy.
 Resume infers saved settings and rejects conflicts; offline export needs no key.
 
 New manifests keep the five-field extraction contract and add optional

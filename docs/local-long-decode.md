@@ -62,3 +62,7 @@ References:
 - [GenerateContent long decode](https://ai.google.dev/gemini-api/docs/generate-content/long-decode)
 - [Audio input](https://ai.google.dev/gemini-api/docs/audio)
 - [Structured output](https://ai.google.dev/gemini-api/docs/structured-output)
+
+Agent-initiated paid retries follow the
+[bounded retry policy](../skills/gemini-transcribe/references/retries.md). An
+authorized workflow includes up to three retries without renewed approval.
